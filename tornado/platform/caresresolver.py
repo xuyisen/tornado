@@ -64,12 +64,18 @@ class CaresResolver(Resolver):
         self, host: str, port: int, family: int = 0
     ) -> "Generator[Any, Any, List[Tuple[int, Any]]]":
         if is_valid_ip(host):
-            addresses = [host]
+            if "." in host:
+                address_family = socket.AF_INET
+            elif ":" in host:
+                address_family = socket.AF_INET6
+            else:
+                address_family = socket.AF_UNSPEC
+            addresses = [(address_family, host)]
         else:
-            # gethostbyname doesn't take callback as a kwarg
             fut = Future()  # type: Future[Tuple[Any, Any]]
-            self.channel.gethostbyname(
-                host, family, lambda result, error: fut.set_result((result, error))
+            self.channel.getaddrinfo(
+                host, port, family=family,
+                callback=lambda result, error: fut.set_result((result, error))
             )
             result, error = yield fut
             if error:
@@ -77,15 +83,12 @@ class CaresResolver(Resolver):
                     "C-Ares returned error %s: %s while resolving %s"
                     % (error, pycares.errno.strerror(error), host)
                 )
-            addresses = result.addresses
+            addresses = []
+            for node in result.nodes:
+                address = node.addr[0].decode("utf-8")
+                addresses.append((node.family, address))
         addrinfo = []
-        for address in addresses:
-            if "." in address:
-                address_family = socket.AF_INET
-            elif ":" in address:
-                address_family = socket.AF_INET6
-            else:
-                address_family = socket.AF_UNSPEC
+        for address_family, address in addresses:
             if family != socket.AF_UNSPEC and family != address_family:
                 raise OSError(
                     "Requested socket family %d but got %d" % (family, address_family)
